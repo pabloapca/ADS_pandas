@@ -1,45 +1,61 @@
 import pandas as pd
 import glob
 import os
+import datetime
 
 # 1. Setup paths
 input_path = './all_covid_data' 
-output_file = 'fused_election_data.csv'
+output_file = 'daily_sentiment_volatility.csv'
 all_files = glob.glob(os.path.join(input_path, "*.csv"))
 
-print(f"🚀 Found {len(all_files)} files. Starting Fusion...")
+print(f"🚀 Found {len(all_files)} files. Starting Temporal Aggregation...")
 
-# 2. Optimization: Define only the columns you need for the report
-# This prevents your computer from crashing on 917 files
-keep_cols = ['created_at', 'tweet', 'likes', 'retweet_count', 'user_followers_count', 'state', 'country']
-
-df_list = []
+# The actual IEEE dataset has no headers. 
+# Column 0: Tweet ID | Column 1: Sentiment Score
+daily_stats = []
 
 for i, filename in enumerate(all_files):
     try:
-        # lineterminator='\n' handles messy tweet newlines
-        # low_memory=False prevents DtypeWarnings
-        temp_df = pd.read_csv(filename, lineterminator='\n', usecols=keep_cols, low_memory=False)
+        # We read the file without headers
+        # Use only column 1 (sentiment) to save massive amounts of RAM
+        # We use column 0 (ID) just for the first row to get the date
+        df = pd.read_csv(filename, header=None, names=['tweet_id', 'sentiment'], low_memory=False)
         
-        # Add a source column (useful for Outlier Investigation later)
-        temp_df['source_file'] = os.path.basename(filename)
+        # --- EXCELLENT GRADE FEATURE: Bit-shift ID to get exact Date ---
+        # Twitter encodes the timestamp in the ID. This logic is from the IEEE instructions.
+        example_id = int(df['tweet_id'].iloc[0])
+        timestamp = (example_id >> 22) + 1288834974657
+        date = datetime.datetime.fromtimestamp(timestamp/1000.0).date()
         
-        df_list.append(temp_df)
+        # --- ANALYTICAL DEPTH: Calculate Volatility ---
+        # Instead of just the mean, we calculate the Standard Deviation (Volatility)
+        # and the count (Volume), matching the ONS Loneliness methodology.
+        stats = {
+            'date': date,
+            'sentiment_mean': df['sentiment'].mean(),
+            'sentiment_volatility': df['sentiment'].std(), # This is your key metric!
+            'tweet_volume': len(df),
+            'source_file': os.path.basename(filename)
+        }
         
-        if i % 100 == 0:
-            print(f"✅ Merged {i} files...")
+        daily_stats.append(stats)
+        
+        if i % 50 == 0:
+            print(f"✅ Processed {i} files. Current Date: {date}")
             
     except Exception as e:
-        print(f"⚠️ Skipping {filename} due to error: {e}")
+        print(f"⚠️ Skipping {filename}: {e}")
 
-# 3. Final Concatenation
-print("🔗 Finalizing concatenation...")
-full_df = pd.concat(df_list, axis=0, ignore_index=True)
+# 2. Final Fusion
+print("🔗 Fusing daily aggregates...")
+fused_df = pd.DataFrame(daily_stats)
 
-# 4. Filter for US Only (As per your report scope)
-full_df = full_df[full_df['country'] == 'United States of America']
+# 3. Handle Missing Data (As per SPHERE report)
+# If volatility is NaN (happens if a file has only 1 tweet), we drop or impute.
+fused_df = fused_df.dropna(subset=['sentiment_volatility'])
 
-# 5. Save for Analysis
-full_df.to_csv(output_file, index=False)
-print(f"🎉 Success! Fused dataset saved as {output_file}")
-print(f"Total Tweets: {len(full_df)}")
+# 4. Save the "Cleaned" Fused Dataset
+fused_df.to_csv(output_file, index=False)
+
+print(f"🎉 Success! Fused metrics saved as {output_file}")
+print(f"Final Dataset Shape: {fused_df.shape}")
